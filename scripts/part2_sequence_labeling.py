@@ -22,6 +22,12 @@ SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+    torch.backends.cudnn.enabled = False
+
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 POS_TAGS = ["NOUN", "VERB", "ADJ", "ADV", "PRON", "DET", "CONJ", "POST", "NUM", "PUNC", "AUX", "UNK"]
@@ -769,20 +775,26 @@ def plot_curves(train_losses, val_losses, title, path):
     plt.close()
 
 
-def evaluate_pos(model, loader, idx2label, pad_label_idx):
+def evaluate_pos(model, loader, idx2label, pad_label_idx, device=None):
+    if device is None:
+        device = DEVICE
+
     model.eval()
     y_true = []
     y_pred = []
 
     with torch.no_grad():
         for words, labels, lengths, mask, tok_batch, sent_batch in loader:
+            words = words.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            lengths = lengths.to(device, non_blocking=True)
             logits = model(words, lengths)
             preds = torch.argmax(logits, dim=-1)
 
             for i in range(words.size(0)):
                 length = int(lengths[i].item())
-                true_seq = labels[i, :length].tolist()
-                pred_seq = preds[i, :length].tolist()
+                true_seq = labels[i, :length].detach().cpu().tolist()
+                pred_seq = preds[i, :length].detach().cpu().tolist()
                 for t, p in zip(true_seq, pred_seq):
                     if t == pad_label_idx:
                         continue
@@ -808,7 +820,11 @@ def train_pos_model(
     dropout=0.5,
     bidirectional=True,
     max_epochs=20,
+    device=None,
 ):
+    if device is None:
+        device = DEVICE
+
     model = BiLSTMTagger(
         vocab_size=vocab_size,
         emb_dim=emb_dim,
@@ -818,7 +834,7 @@ def train_pos_model(
         freeze=freeze,
         dropout=dropout,
         bidirectional=bidirectional,
-    )
+    ).to(device)
     criterion = nn.CrossEntropyLoss(ignore_index=pad_label_idx)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
 
@@ -834,6 +850,9 @@ def train_pos_model(
         steps = 0
 
         for words, labels, lengths, mask, tok_batch, sent_batch in train_loader:
+            words = words.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            lengths = lengths.to(device, non_blocking=True)
             logits = model(words, lengths)
             loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
             optimizer.zero_grad()
@@ -849,14 +868,17 @@ def train_pos_model(
         val_steps = 0
         with torch.no_grad():
             for words, labels, lengths, mask, tok_batch, sent_batch in val_loader:
+                words = words.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+                lengths = lengths.to(device, non_blocking=True)
                 logits = model(words, lengths)
                 loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
                 val_epoch_loss += float(loss.item())
                 val_steps += 1
         val_losses.append(val_epoch_loss / max(val_steps, 1))
 
-        _, val_f1, _, _ = evaluate_pos(model, val_loader, idx2label, pad_label_idx)
-        print(f"POS epoch {epoch + 1} train_loss {train_losses[-1]:.4f} val_loss {val_losses[-1]:.4f} val_f1 {val_f1:.4f}")
+        _, val_f1, _, _ = evaluate_pos(model, val_loader, idx2label, pad_label_idx, device=device)
+        print(f"pos {epoch + 1}/{max_epochs} f1 {val_f1:.4f}")
 
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
@@ -871,7 +893,10 @@ def train_pos_model(
     return model, train_losses, val_losses, best_val_f1
 
 
-def evaluate_ner(model, loader, idx2label, pad_label_idx, use_crf):
+def evaluate_ner(model, loader, idx2label, pad_label_idx, use_crf, device=None):
+    if device is None:
+        device = DEVICE
+
     model.eval()
     true_seq_all = []
     pred_seq_all = []
@@ -879,6 +904,10 @@ def evaluate_ner(model, loader, idx2label, pad_label_idx, use_crf):
 
     with torch.no_grad():
         for words, labels, lengths, mask, tok_batch, sent_batch in loader:
+            words = words.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            lengths = lengths.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
             emissions = model(words, lengths)
             if use_crf:
                 pred_paths = model.crf.decode(emissions, mask)
@@ -905,7 +934,7 @@ def evaluate_ner(model, loader, idx2label, pad_label_idx, use_crf):
 
             for i in range(words.size(0)):
                 length = int(lengths[i].item())
-                true_ids = labels[i, :length].tolist()
+                true_ids = labels[i, :length].detach().cpu().tolist()
                 pred_ids = pred_paths[i]
                 true_labels = [idx2label[t] for t in true_ids if t != pad_label_idx]
                 pred_labels = [idx2label[p] for p in pred_ids[: len(true_labels)]]
@@ -941,7 +970,11 @@ def train_ner_model(
     dropout=0.5,
     bidirectional=True,
     max_epochs=20,
+    device=None,
 ):
+    if device is None:
+        device = DEVICE
+
     model = NERTagger(
         vocab_size=vocab_size,
         emb_dim=emb_dim,
@@ -952,7 +985,7 @@ def train_ner_model(
         dropout=dropout,
         bidirectional=bidirectional,
         use_crf=use_crf,
-    )
+    ).to(device)
 
     criterion = nn.CrossEntropyLoss(ignore_index=pad_label_idx)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
@@ -969,6 +1002,11 @@ def train_ner_model(
         steps = 0
 
         for words, labels, lengths, mask, tok_batch, sent_batch in train_loader:
+            words = words.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            lengths = lengths.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+
             emissions = model(words, lengths)
             if use_crf:
                 labels_for_crf = labels.clone()
@@ -992,6 +1030,11 @@ def train_ner_model(
         val_steps = 0
         with torch.no_grad():
             for words, labels, lengths, mask, tok_batch, sent_batch in val_loader:
+                words = words.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+                lengths = lengths.to(device, non_blocking=True)
+                mask = mask.to(device, non_blocking=True)
+
                 emissions = model(words, lengths)
                 if use_crf:
                     labels_for_crf = labels.clone()
@@ -1001,12 +1044,13 @@ def train_ner_model(
                     loss = crf_loss + 0.5 * ce_loss
                 else:
                     loss = criterion(emissions.view(-1, emissions.size(-1)), labels.view(-1))
+
                 val_epoch_loss += float(loss.item())
                 val_steps += 1
         val_losses.append(val_epoch_loss / max(val_steps, 1))
 
-        _, val_f1, _ = evaluate_ner(model, val_loader, idx2label, pad_label_idx, use_crf)
-        print(f"NER epoch {epoch + 1} train_loss {train_losses[-1]:.4f} val_loss {val_losses[-1]:.4f} val_f1 {val_f1:.4f}")
+        _, val_f1, _ = evaluate_ner(model, val_loader, idx2label, pad_label_idx, use_crf, device=device)
+        print(f"ner {epoch + 1}/{max_epochs} f1 {val_f1:.4f}")
 
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
@@ -1035,7 +1079,10 @@ def extract_pos_confusions(y_true, y_pred):
     return cm, pair_counts[:3]
 
 
-def collect_confusion_examples(test_rows, pos_model, word2idx, pos_label2idx, pos_idx2label):
+def collect_confusion_examples(test_rows, pos_model, word2idx, pos_label2idx, pos_idx2label, device=None):
+    if device is None:
+        device = DEVICE
+
     examples = defaultdict(list)
     ds = SeqDataset(
         encode_rows(test_rows, word2idx, pos_label2idx, "pos_tags")
@@ -1045,6 +1092,9 @@ def collect_confusion_examples(test_rows, pos_model, word2idx, pos_label2idx, po
     pos_model.eval()
     with torch.no_grad():
         for words, labels, lengths, mask, tok_batch, sent_batch in loader:
+            words = words.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            lengths = lengths.to(device, non_blocking=True)
             logits = pos_model(words, lengths)
             preds = torch.argmax(logits, dim=-1)
             for i in range(words.size(0)):
@@ -1085,6 +1135,7 @@ def to_builtin(obj):
 
 def main():
     ensure_dirs()
+    print(f"device {DEVICE.type}")
 
     cleaned_rows = read_articles("cleaned.txt")
     metadata = load_metadata("Metadata.json")
@@ -1124,13 +1175,14 @@ def main():
     ner_val_enc = encode_rows(val_rows, word2idx, ner_label2idx, "ner_tags")
     ner_test_enc = encode_rows(test_rows, word2idx, ner_label2idx, "ner_tags")
 
-    pos_train_loader = DataLoader(SeqDataset(pos_train_enc), batch_size=32, shuffle=True, collate_fn=lambda b: collate_batch(b, pos_pad_idx))
-    pos_val_loader = DataLoader(SeqDataset(pos_val_enc), batch_size=32, shuffle=False, collate_fn=lambda b: collate_batch(b, pos_pad_idx))
-    pos_test_loader = DataLoader(SeqDataset(pos_test_enc), batch_size=32, shuffle=False, collate_fn=lambda b: collate_batch(b, pos_pad_idx))
+    pin_mem = False
+    pos_train_loader = DataLoader(SeqDataset(pos_train_enc), batch_size=32, shuffle=True, pin_memory=pin_mem, collate_fn=lambda b: collate_batch(b, pos_pad_idx))
+    pos_val_loader = DataLoader(SeqDataset(pos_val_enc), batch_size=32, shuffle=False, pin_memory=pin_mem, collate_fn=lambda b: collate_batch(b, pos_pad_idx))
+    pos_test_loader = DataLoader(SeqDataset(pos_test_enc), batch_size=32, shuffle=False, pin_memory=pin_mem, collate_fn=lambda b: collate_batch(b, pos_pad_idx))
 
-    ner_train_loader = DataLoader(SeqDataset(ner_train_enc), batch_size=32, shuffle=True, collate_fn=lambda b: collate_batch(b, ner_pad_idx))
-    ner_val_loader = DataLoader(SeqDataset(ner_val_enc), batch_size=32, shuffle=False, collate_fn=lambda b: collate_batch(b, ner_pad_idx))
-    ner_test_loader = DataLoader(SeqDataset(ner_test_enc), batch_size=32, shuffle=False, collate_fn=lambda b: collate_batch(b, ner_pad_idx))
+    ner_train_loader = DataLoader(SeqDataset(ner_train_enc), batch_size=32, shuffle=True, pin_memory=pin_mem, collate_fn=lambda b: collate_batch(b, ner_pad_idx))
+    ner_val_loader = DataLoader(SeqDataset(ner_val_enc), batch_size=32, shuffle=False, pin_memory=pin_mem, collate_fn=lambda b: collate_batch(b, ner_pad_idx))
+    ner_test_loader = DataLoader(SeqDataset(ner_test_enc), batch_size=32, shuffle=False, pin_memory=pin_mem, collate_fn=lambda b: collate_batch(b, ner_pad_idx))
 
     # POS frozen
     pos_frozen_model, pos_frozen_train_losses, pos_frozen_val_losses, pos_frozen_val_f1 = train_pos_model(
@@ -1147,6 +1199,7 @@ def main():
         dropout=0.5,
         bidirectional=True,
         max_epochs=20,
+        device=DEVICE,
     )
     plot_curves(pos_frozen_train_losses, pos_frozen_val_losses, "POS Loss (Frozen Embeddings)", "figures/part2_pos_loss_frozen.png")
 
@@ -1165,10 +1218,11 @@ def main():
         dropout=0.5,
         bidirectional=True,
         max_epochs=20,
+        device=DEVICE,
     )
     plot_curves(pos_ft_train_losses, pos_ft_val_losses, "POS Loss (Fine-tuned Embeddings)", "figures/part2_pos_loss_finetuned.png")
 
-    pos_acc, pos_macro_f1, pos_true, pos_pred = evaluate_pos(pos_ft_model, pos_test_loader, pos_idx2label, pos_pad_idx)
+    pos_acc, pos_macro_f1, pos_true, pos_pred = evaluate_pos(pos_ft_model, pos_test_loader, pos_idx2label, pos_pad_idx, device=DEVICE)
 
     cm, top_confused = extract_pos_confusions(pos_true, pos_pred)
     plt.figure(figsize=(10, 8))
@@ -1180,7 +1234,7 @@ def main():
     plt.savefig("figures/part2_pos_confusion_matrix.png", dpi=180)
     plt.close()
 
-    confusion_examples = collect_confusion_examples(test_rows, pos_ft_model, word2idx, pos_label2idx, pos_idx2label)
+    confusion_examples = collect_confusion_examples(test_rows, pos_ft_model, word2idx, pos_label2idx, pos_idx2label, device=DEVICE)
 
     torch.save(pos_ft_model.state_dict(), "models/bilstm_pos.pt")
 
@@ -1200,6 +1254,7 @@ def main():
         dropout=0.5,
         bidirectional=True,
         max_epochs=20,
+        device=DEVICE,
     )
     plot_curves(ner_crf_frozen_train_losses, ner_crf_frozen_val_losses, "NER Loss (CRF, Frozen)", "figures/part2_ner_loss_crf_frozen.png")
 
@@ -1218,6 +1273,7 @@ def main():
         dropout=0.5,
         bidirectional=True,
         max_epochs=20,
+        device=DEVICE,
     )
     plot_curves(ner_crf_ft_train_losses, ner_crf_ft_val_losses, "NER Loss (CRF, Fine-tuned)", "figures/part2_ner_loss_crf_finetuned.png")
 
@@ -1227,6 +1283,7 @@ def main():
         ner_idx2label,
         ner_pad_idx,
         use_crf=True,
+        device=DEVICE,
     )
 
     # NER without CRF
@@ -1245,6 +1302,7 @@ def main():
         dropout=0.5,
         bidirectional=True,
         max_epochs=20,
+        device=DEVICE,
     )
     plot_curves(ner_softmax_train_losses, ner_softmax_val_losses, "NER Loss (Softmax)", "figures/part2_ner_loss_softmax.png")
 
@@ -1254,6 +1312,7 @@ def main():
         ner_idx2label,
         ner_pad_idx,
         use_crf=False,
+        device=DEVICE,
     )
 
     torch.save(ner_crf_ft_model.state_dict(), "models/bilstm_ner.pt")
@@ -1279,8 +1338,9 @@ def main():
         dropout=0.5,
         bidirectional=False,
         max_epochs=12,
+        device=DEVICE,
     )
-    _, a1_f1, _ = evaluate_ner(a1_model, ner_test_loader, ner_idx2label, ner_pad_idx, use_crf=True)
+    _, a1_f1, _ = evaluate_ner(a1_model, ner_test_loader, ner_idx2label, ner_pad_idx, use_crf=True, device=DEVICE)
     ablation_results["A1_unidirectional_lstm"] = a1_f1
 
     # A2: no dropout
@@ -1299,8 +1359,9 @@ def main():
         dropout=0.0,
         bidirectional=True,
         max_epochs=12,
+        device=DEVICE,
     )
-    _, a2_f1, _ = evaluate_ner(a2_model, ner_test_loader, ner_idx2label, ner_pad_idx, use_crf=True)
+    _, a2_f1, _ = evaluate_ner(a2_model, ner_test_loader, ner_idx2label, ner_pad_idx, use_crf=True, device=DEVICE)
     ablation_results["A2_no_dropout"] = a2_f1
 
     # A3: random embedding initialization
@@ -1319,8 +1380,9 @@ def main():
         dropout=0.5,
         bidirectional=True,
         max_epochs=12,
+        device=DEVICE,
     )
-    _, a3_f1, _ = evaluate_ner(a3_model, ner_test_loader, ner_idx2label, ner_pad_idx, use_crf=True)
+    _, a3_f1, _ = evaluate_ner(a3_model, ner_test_loader, ner_idx2label, ner_pad_idx, use_crf=True, device=DEVICE)
     ablation_results["A3_random_embeddings"] = a3_f1
 
     # A4: softmax output instead of CRF
@@ -1395,11 +1457,25 @@ def main():
     with open("data/part2_report.json", "w", encoding="utf-8") as f:
         json.dump(to_builtin(report), f, ensure_ascii=False, indent=2)
 
-    print("Saved data/pos_train.conll, data/pos_val.conll, data/pos_test.conll")
-    print("Saved data/ner_train.conll, data/ner_val.conll, data/ner_test.conll")
-    print("Saved models/bilstm_pos.pt and models/bilstm_ner.pt")
-    print("Saved figures for POS/NER losses and confusion matrix")
-    print("Saved data/part2_report.json")
+    if DEVICE.type == "cuda":
+        for mdl in [
+            pos_frozen_model,
+            pos_ft_model,
+            ner_crf_frozen_model,
+            ner_crf_ft_model,
+            ner_softmax_model,
+            a1_model,
+            a2_model,
+            a3_model,
+        ]:
+            mdl.cpu()
+        torch.cuda.empty_cache()
+
+    print("part2 done")
+
+    if DEVICE.type == "cuda" and os.name == "nt":
+        # Work around a Windows CUDA teardown crash after successful completion.
+        os._exit(0)
 
 
 if __name__ == "__main__":
