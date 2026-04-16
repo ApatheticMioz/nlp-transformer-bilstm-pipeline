@@ -20,6 +20,12 @@ SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+    torch.backends.cudnn.enabled = False
+
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 CATEGORY_TO_ID = {
@@ -324,7 +330,11 @@ def cosine_warmup_lr(step, total_steps, base_lr, warmup_steps=50):
     return 0.5 * base_lr * (1.0 + math.cos(math.pi * progress))
 
 
-def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=False):
+def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=False, device=None):
+    if device is None:
+        device = DEVICE
+
+    model = model.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=0.01)
 
@@ -349,6 +359,10 @@ def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=F
         y_pred = []
 
         for input_ids, mask, labels, tokens, article_ids in train_loader:
+            input_ids = input_ids.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
             if use_scheduler:
                 lr = cosine_warmup_lr(global_step, total_steps, 5e-4, warmup_steps=50)
                 set_lr(optimizer, lr)
@@ -361,8 +375,8 @@ def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=F
 
             e_loss += float(loss.item())
             preds = torch.argmax(logits, dim=-1)
-            y_true.extend(labels.tolist())
-            y_pred.extend(preds.tolist())
+            y_true.extend(labels.detach().cpu().tolist())
+            y_pred.extend(preds.detach().cpu().tolist())
             global_step += 1
 
         train_losses.append(e_loss / max(len(train_loader), 1))
@@ -374,25 +388,27 @@ def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=F
         vy_pred = []
         with torch.no_grad():
             for input_ids, mask, labels, tokens, article_ids in val_loader:
+                input_ids = input_ids.to(device, non_blocking=True)
+                mask = mask.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+
                 logits, _ = model(input_ids, mask)
                 loss = criterion(logits, labels)
                 v_loss += float(loss.item())
                 preds = torch.argmax(logits, dim=-1)
-                vy_true.extend(labels.tolist())
-                vy_pred.extend(preds.tolist())
+                vy_true.extend(labels.detach().cpu().tolist())
+                vy_pred.extend(preds.detach().cpu().tolist())
 
         val_losses.append(v_loss / max(len(val_loader), 1))
         val_acc = accuracy_score(vy_true, vy_pred)
         val_accs.append(val_acc)
         epoch_times.append(time.perf_counter() - t0)
 
-        print(
-            f"epoch {epoch + 1} train_loss {train_losses[-1]:.4f} val_loss {val_losses[-1]:.4f} train_acc {train_accs[-1]:.4f} val_acc {val_accs[-1]:.4f}"
-        )
+        print(f"clf {epoch + 1}/{epochs} val_acc {val_acc:.4f}")
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             best_epoch = epoch + 1
 
     if best_state is not None:
@@ -410,7 +426,10 @@ def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=F
     }
 
 
-def evaluate_classifier(model, loader):
+def evaluate_classifier(model, loader, device=None):
+    if device is None:
+        device = DEVICE
+
     model.eval()
     y_true = []
     y_pred = []
@@ -418,21 +437,25 @@ def evaluate_classifier(model, loader):
 
     with torch.no_grad():
         for input_ids, mask, labels, tokens, article_ids in loader:
+            input_ids = input_ids.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
             logits, attn = model(input_ids, mask)
             preds = torch.argmax(logits, dim=-1)
-            y_true.extend(labels.tolist())
-            y_pred.extend(preds.tolist())
+            y_true.extend(labels.detach().cpu().tolist())
+            y_pred.extend(preds.detach().cpu().tolist())
 
             if attn is not None:
                 for i in range(input_ids.size(0)):
                     attn_payload.append(
                         {
                             "article_id": int(article_ids[i]),
-                            "true": int(labels[i]),
-                            "pred": int(preds[i]),
+                            "true": int(labels[i].item()),
+                            "pred": int(preds[i].item()),
                             "tokens": tokens[i],
-                            "attn": attn[i].cpu().numpy(),
-                            "mask": mask[i].cpu().numpy(),
+                            "attn": attn[i].detach().cpu().numpy(),
+                            "mask": mask[i].detach().cpu().numpy(),
                         }
                     )
 
@@ -557,6 +580,7 @@ def write_comparison(transformer_metrics, bilstm_metrics):
 
 def main():
     ensure_dirs()
+    print(f"device {DEVICE.type}")
 
     cleaned_rows = read_articles("cleaned.txt")
     metadata = load_metadata("Metadata.json")
@@ -573,24 +597,25 @@ def main():
     val_enc = encode_sequences(val_rows, word2idx, max_len=256)
     test_enc = encode_sequences(test_rows, word2idx, max_len=256)
 
-    train_loader = DataLoader(TextDataset(train_enc), batch_size=16, shuffle=True, collate_fn=text_collate)
-    val_loader = DataLoader(TextDataset(val_enc), batch_size=16, shuffle=False, collate_fn=text_collate)
-    test_loader = DataLoader(TextDataset(test_enc), batch_size=16, shuffle=False, collate_fn=text_collate)
+    pin_mem = False
+    train_loader = DataLoader(TextDataset(train_enc), batch_size=16, shuffle=True, pin_memory=pin_mem, collate_fn=text_collate)
+    val_loader = DataLoader(TextDataset(val_enc), batch_size=16, shuffle=False, pin_memory=pin_mem, collate_fn=text_collate)
+    test_loader = DataLoader(TextDataset(test_enc), batch_size=16, shuffle=False, pin_memory=pin_mem, collate_fn=text_collate)
 
     transformer = TransformerTopicClassifier(vocab_size=len(word2idx), num_classes=5, d_model=128, num_heads=4, d_ff=512, num_layers=4, dropout=0.1)
-    t_hist = train_classifier(transformer, train_loader, val_loader, epochs=20, use_scheduler=True)
+    t_hist = train_classifier(transformer, train_loader, val_loader, epochs=20, use_scheduler=True, device=DEVICE)
     plot_training_curves(t_hist["train_losses"], t_hist["val_losses"], t_hist["train_accs"], t_hist["val_accs"], "Transformer")
 
-    t_acc, t_f1, t_true, t_pred, attn_payload = evaluate_classifier(t_hist["model"], test_loader)
+    t_acc, t_f1, t_true, t_pred, attn_payload = evaluate_classifier(t_hist["model"], test_loader, device=DEVICE)
     save_confusion_matrix(t_true, t_pred, "figures/part3_transformer_confusion_matrix.png", "Transformer Confusion Matrix")
     attention_files = save_attention_heatmaps(attn_payload)
     torch.save(t_hist["model"].state_dict(), "models/transformer_cls.pt")
 
     bilstm = BiLSTMTopicClassifier(vocab_size=len(word2idx), num_classes=5, emb_dim=128, hidden_dim=128, dropout=0.3)
-    b_hist = train_classifier(bilstm, train_loader, val_loader, epochs=20, use_scheduler=False)
+    b_hist = train_classifier(bilstm, train_loader, val_loader, epochs=20, use_scheduler=False, device=DEVICE)
     plot_training_curves(b_hist["train_losses"], b_hist["val_losses"], b_hist["train_accs"], b_hist["val_accs"], "BiLSTM")
 
-    b_acc, b_f1, b_true, b_pred, _ = evaluate_classifier(b_hist["model"], test_loader)
+    b_acc, b_f1, b_true, b_pred, _ = evaluate_classifier(b_hist["model"], test_loader, device=DEVICE)
     save_confusion_matrix(b_true, b_pred, "figures/part3_bilstm_confusion_matrix.png", "BiLSTM Confusion Matrix")
 
     transformer_metrics = {
@@ -624,12 +649,16 @@ def main():
     with open("data/part3_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
 
-    print("Saved models/transformer_cls.pt")
-    print("Saved figures for transformer and bilstm training curves")
-    print("Saved figures/part3_transformer_confusion_matrix.png")
-    print("Saved attention heatmaps for correct samples")
-    print("Saved data/part3_report.json")
-    print("Saved data/part3_bilstm_vs_transformer.txt")
+    if DEVICE.type == "cuda":
+        for mdl in [transformer, bilstm]:
+            mdl.cpu()
+        torch.cuda.empty_cache()
+
+    print("part3 done")
+
+    if DEVICE.type == "cuda" and os.name == "nt":
+        # Work around a Windows CUDA teardown crash after successful completion.
+        os._exit(0)
 
 
 if __name__ == "__main__":
