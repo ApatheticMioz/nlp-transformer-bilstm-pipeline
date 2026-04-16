@@ -1,10 +1,10 @@
-1. Transformer test accuracy was 0.7222 while BiLSTM test accuracy was 0.5556.
-2. The accuracy gap was 0.1667, so Transformer performed better.
+1. Transformer test accuracy was 0.6944 while BiLSTM test accuracy was 0.6111.
+2. The accuracy gap was 0.0833, so Transformer performed better.
 3. Transformer reached best validation accuracy at epoch 10.
-4. BiLSTM reached best validation accuracy at epoch 1.
-5. This means BiLSTM converged in fewer epochs.
-6. Average training time per epoch for Transformer was 2.46 seconds.
-7. Average training time per epoch for BiLSTM was 0.73 seconds.
+4. BiLSTM reached best validation accuracy at epoch 15.
+5. This means Transformer converged in fewer epochs.
+6. Average training time per epoch for Transformer was 0.26 seconds.
+7. Average training time per epoch for BiLSTM was 2.70 seconds.
 8. The Transformer is usually slower per epoch because multi-head attention computes token-to-token interactions.
 9. BiLSTM is often faster because it uses recurrent steps without full pairwise attention maps.
 10. The attention heatmaps show that final-layer heads focus strongly on a few topic-indicative tokens.
