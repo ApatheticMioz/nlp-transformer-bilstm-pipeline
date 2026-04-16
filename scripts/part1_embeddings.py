@@ -17,6 +17,11 @@ SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def ensure_dirs():
@@ -391,16 +396,20 @@ def train_skipgram(
     batch_size=1024,
     epochs=5,
     max_pairs=900000,
+    device=None,
 ):
+    if device is None:
+        device = DEVICE
+
     vocab_size = len(idx2word)
     freqs = np.array([counter.get(idx2word[i], 1) for i in range(vocab_size)], dtype=np.float64)
     freqs = np.power(freqs, 0.75)
     probs = freqs / freqs.sum()
-    noise_dist = torch.tensor(probs, dtype=torch.float32)
+    noise_dist = torch.tensor(probs, dtype=torch.float32, device=device)
 
     centers, contexts = build_skipgram_pairs(mapped_docs, window=window, max_pairs=max_pairs)
 
-    model = SkipGramNS(vocab_size, dim)
+    model = SkipGramNS(vocab_size, dim).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     losses = []
@@ -416,8 +425,8 @@ def train_skipgram(
 
         for start in range(0, num_samples, batch_size):
             end = min(num_samples, start + batch_size)
-            c = torch.tensor(centers[start:end], dtype=torch.long)
-            p = torch.tensor(contexts[start:end], dtype=torch.long)
+            c = torch.tensor(centers[start:end], dtype=torch.long, device=device)
+            p = torch.tensor(contexts[start:end], dtype=torch.long, device=device)
             bsz = c.shape[0]
             n = torch.multinomial(noise_dist, bsz * negatives, replacement=True).view(bsz, negatives)
 
@@ -431,10 +440,7 @@ def train_skipgram(
             epoch_loss += value
             steps += 1
 
-            if steps % 200 == 0:
-                print(f"epoch {epoch + 1} step {steps} loss {value:.4f}")
-
-        print(f"epoch {epoch + 1} avg_loss {(epoch_loss / max(steps, 1)):.4f}")
+        print(f"skipgram {epoch + 1}/{epochs} loss {(epoch_loss / max(steps, 1)):.4f}")
 
     with torch.no_grad():
         e1 = model.center.weight.detach().cpu().numpy()
@@ -517,6 +523,7 @@ def pick_query_variant(word2idx, variants):
 
 def main():
     ensure_dirs()
+    print(f"device {DEVICE.type}")
 
     cleaned_rows = read_articles("cleaned.txt")
     raw_rows = read_articles("raw.txt")
@@ -577,6 +584,7 @@ def main():
         batch_size=1024,
         epochs=5,
         max_pairs=900000,
+        device=DEVICE,
     )
     np.save("embeddings/embeddings_w2v.npy", c3_emb)
     plot_loss(c3_losses, "figures/part1_skipgram_loss_c3.png", "Skip-gram Loss Curve (C3, cleaned.txt, d=100)")
@@ -701,6 +709,7 @@ def main():
         batch_size=1024,
         epochs=5,
         max_pairs=700000,
+        device=DEVICE,
     )
     plot_loss(c2_losses, "figures/part1_skipgram_loss_c2.png", "Skip-gram Loss Curve (C2, raw.txt, d=100)")
 
@@ -715,6 +724,7 @@ def main():
         batch_size=1024,
         epochs=5,
         max_pairs=700000,
+        device=DEVICE,
     )
     plot_loss(c4_losses, "figures/part1_skipgram_loss_c4.png", "Skip-gram Loss Curve (C4, cleaned.txt, d=200)")
 
@@ -795,13 +805,7 @@ def main():
             f.write(f"  {k}: {v:.4f}\n")
         f.write(f"Best condition: {best_condition}\n")
 
-    print("Saved embeddings/tfidf_matrix.npy")
-    print("Saved embeddings/ppmi_matrix.npy")
-    print("Saved embeddings/embeddings_w2v.npy")
-    print("Saved embeddings/word2idx.json")
-    print("Saved embeddings/part1_report.json")
-    print("Saved figures/part1_tsne_top200.png")
-    print("Saved figures/part1_skipgram_loss_c3.png")
+    print("part1 done")
 
 
 if __name__ == "__main__":
