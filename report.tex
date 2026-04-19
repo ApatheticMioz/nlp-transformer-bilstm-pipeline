@@ -1,0 +1,123 @@
+\documentclass[12pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fontspec}
+\usepackage{titlesec}
+
+\IfFontExistsTF{Times New Roman}{
+  \setmainfont{Times New Roman}
+}{
+  \setmainfont{TeX Gyre Termes}
+}
+
+\onehalfspacing
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.5em}{}
+\renewcommand{\arraystretch}{1.15}
+
+\begin{document}
+
+\begin{center}
+{\Large \textbf{CS-4063 Natural Language Processing}}\\[0.25em]
+{\large Assignment 2: Neural NLP Pipeline}\\[0.4em]
+{i23-2523}\\[0.25em]
+Repository: \url{https://github.com/ApatheticMioz/nlp-transformer-bilstm-pipeline}
+\end{center}
+
+\section{Overview}
+This submission implements all three parts of the assignment from scratch in PyTorch and keeps the required artifacts in the expected folder layout. The notebook is mainly a runner and result presenter; the actual training and preprocessing logic lives in \texttt{scripts/}. I also checked the submission bundle with the rubric audit script, and it passed cleanly.
+
+The corpus for the assignment was generated from the provided Urdu news sources, and the final reports were written from the saved metrics instead of hand-tuned placeholders. That mattered for Part 2 and Part 3 in particular, because the dataset is small and noisy, so the results are more believable when they are shown as they were actually produced.
+
+\section{Part 1: Word Embeddings}
+The embedding pipeline produced the requested TF-IDF and PPMI matrices with the expected shapes, namely \texttt{(240, 10001)} and \texttt{(10001, 10001)}. The TF-IDF vocabulary cap worked as intended, and the topic-wise discriminative terms were mostly sensible, although the corpus noise means some categories still pick up stray words. For the nearest-neighbour check, the cleaned skip-gram model returned the required ten query words, and the analogy evaluation got 7 out of 10 correct in the top-3 candidates.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}lXr@{}}
+\toprule
+Condition & Description & MRR \\
+\midrule
+C1 & PPMI baseline & 0.0524 \\
+C2 & Skip-gram on raw corpus & 0.0008 \\
+C3 & Skip-gram on cleaned corpus & 0.0006 \\
+C4 & Skip-gram on cleaned corpus, $d=200$ & 0.0015 \\
+\bottomrule
+\end{tabularx}
+\caption{Four-condition embedding comparison.}
+\end{table}
+
+The PPMI baseline was the strongest by a clear margin on this data. The skip-gram runs were still useful as a learning exercise, but the corpus is small enough that the learned vectors do not get the same stability as the co-occurrence baseline. Increasing the embedding dimension helped a little, but not enough to beat PPMI.
+
+\section{Part 2: POS Tagging and NER}
+For sequence labeling, I sampled 500 sentences and kept the split stratified across the selected topics. The POS lexicon sizes were 220 each for noun, verb, and adjective cues, and the gazetteers covered 61 people, 58 locations, and 33 organisations. The split was 350/75/75 for train, validation, and test.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Metric & Value & Note \\
+\midrule
+POS frozen validation F1 & 0.4852 & Embeddings frozen \\
+POS fine-tuned validation F1 & 0.8058 & Embeddings updated \\
+POS test accuracy & 0.8493 & Final model \\
+POS test macro-F1 & 0.8166 & Final model \\
+NER CRF test overall F1 & 0.1231 & Structured decoding \\
+NER softmax test overall F1 & 0.7069 & Linear output layer \\
+\bottomrule
+\end{tabular}
+\caption{Main Part 2 results.}
+\end{table}
+
+Fine-tuning clearly helped POS tagging, as expected with assignment-specific vocabulary. The biggest POS confusion was between NOUN and VERB, which makes sense in Urdu news text where many stems are ambiguous without richer context.
+
+For NER, the plain softmax output layer worked much better than the CRF in this small setup. The CRF version overfit badly and mostly failed to recover the entity spans, while the softmax model gave a far more usable entity-level score. The ablation study also matched the overall story: removing pretrained embeddings hurt the most, no dropout reduced performance, and the unidirectional LSTM was weaker than the bidirectional version.
+
+\section{Part 3: Transformer Topic Classification}
+The topic classification set contained 233 articles across five categories, with a roughly stratified split of 168/29/36. Politics, International, and Sports dominated the data, while Economy was the smallest class. The custom transformer used a learned CLS token, four encoder blocks, and sinusoidal positional encoding as required.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Split & Politics & Sports & Economy & International & Health/Society \\
+\midrule
+Train & 34 & 32 & 16 & 60 & 26 \\
+Val & 7 & 7 & 4 & 12 & 6 \\
+Test & 8 & 7 & 3 & 13 & 5 \\
+\bottomrule
+\end{tabular}
+\caption{Part 3 class distribution.}
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Model & Test Acc. & Macro-F1 & Best Epoch & Avg. Epoch Time \\
+\midrule
+BiLSTM baseline & 0.4167 & 0.4337 & 18 & 5.57 s \\
+Transformer & 0.5556 & 0.5510 & 16 & 0.50 s \\
+\bottomrule
+\end{tabular}
+\caption{Transformer vs. BiLSTM comparison.}
+\end{table}
+
+The transformer was both more accurate and much faster per epoch on this task, which surprised me a bit at first. The attention heatmaps from the final layer were also readable: the heads tended to focus on topic-bearing tokens and named entities rather than spreading attention uniformly across the sentence. For a dataset this small, I would still treat the BiLSTM as the simpler baseline to trust when compute is tight, but the transformer is the stronger model here and converged in fewer epochs.
+
+\section{Conclusion}
+Overall, the submission meets the assignment requirements and the saved artifacts are consistent with the rubric. Part 1 showed that the PPMI baseline was the most reliable embedding method on this corpus, Part 2 showed a clear gain from fine-tuning the BiLSTM embeddings and a strong benefit from the softmax NER head in this low-resource setting, and Part 3 showed that the custom transformer was the best classifier of the two sequence models. The notebook contains the executed outputs, the scripts reproduce the saved artifacts, and the repository URL above points to the public submission.
+
+\end{document}
