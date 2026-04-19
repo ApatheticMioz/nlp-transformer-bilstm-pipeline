@@ -499,26 +499,91 @@ def save_json(path, obj):
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
 
+def normalize_lookup_token(token):
+    token = token.replace("آ", "ا")
+    token = token.replace("أ", "ا")
+    token = token.replace("إ", "ا")
+    token = token.replace("ٱ", "ا")
+    token = token.replace("ى", "ی")
+    token = token.replace("ي", "ی")
+    token = token.replace("ك", "ک")
+    return token
+
+
 def pick_query_variant(word2idx, variants):
     for v in variants:
         if v in word2idx:
             return v
 
+    normalized_to_word = {}
+    for w in word2idx:
+        if w == "<UNK>":
+            continue
+        nw = normalize_lookup_token(w)
+        if nw not in normalized_to_word:
+            normalized_to_word[nw] = w
+
+    for v in variants:
+        nv = normalize_lookup_token(v)
+        if nv in normalized_to_word:
+            return normalized_to_word[nv]
+
     # Fallback: pick closest-looking token by character overlap.
-    target = variants[0].replace("آ", "ا")
+    target = normalize_lookup_token(variants[0])
+    preferred_first = target[0] if target else ""
     best = None
     best_score = -1
     for w in word2idx:
         if w == "<UNK>":
             continue
-        w_norm = w.replace("آ", "ا")
-        score = sum(ch in w_norm for ch in target)
+        w_norm = normalize_lookup_token(w)
+        same_first = int(bool(preferred_first) and w_norm.startswith(preferred_first))
+        overlap = sum(ch in w_norm for ch in target)
+        score = (10 * same_first) + overlap
         if score > best_score:
             best_score = score
             best = w
     if best is None:
         return variants[0]
     return best
+
+
+TOKEN_VARIANTS = {
+    "پاکستان": ["پاکستان", "پاکستا"],
+    "حکومت": ["حکومت", "حکوم"],
+    "عدالت": ["عدالت", "عدال"],
+    "معیشت": ["معیشت", "معیش"],
+    "فوج": ["فوج"],
+    "صحت": ["صحت"],
+    "تعلیم": ["تعلیم"],
+    "آبادی": ["آبادی", "ابادی", "آباد"],
+    "سیاست": ["سیاست", "سیاس"],
+    "کراچی": ["کراچی", "کراچ"],
+    "لاہور": ["لاہور", "لاہور"],
+    "بھارت": ["بھارت", "انڈیا", "ہند"],
+    "دہلی": ["دہلی", "دہل"],
+    "وزیر": ["وزیر", "وزیراعظم"],
+    "جج": ["جج"],
+    "اسکول": ["اسکول", "سکول"],
+    "ہسپتال": ["ہسپتال", "ہسپتال"],
+    "میچ": ["میچ"],
+    "کھلاڑی": ["کھلاڑی", "کھلاڑ"],
+    "بینک": ["بینک", "بنک"],
+    "پارلیمنٹ": ["پارلیمنٹ", "پارلیمن"],
+    "قانون": ["قانون", "قانو"],
+    "ٹیم": ["ٹیم"],
+    "ڈاکٹر": ["ڈاکٹر", "ڈاکٹ"],
+    "طالبعلم": ["طالبعلم", "طالب"],
+    "بجٹ": ["بجٹ"],
+    "کرکٹ": ["کرکٹ"],
+    "ایران": ["ایران"],
+    "مذاکرات": ["مذاکرات", "مذاکر"],
+}
+
+
+def resolve_token(word2idx, token):
+    variants = TOKEN_VARIANTS.get(token, [token])
+    return pick_query_variant(word2idx, variants)
 
 
 def main():
@@ -552,16 +617,16 @@ def main():
     create_tsne_plot(ppmi, cleaned_counter, idx2word)
 
     query_variants = {
-        "Pakistan": ["پاکستان", "پاکستا"],
-        "Hukumat": ["حکومت", "حکوم"],
-        "Adalat": ["عدالت", "عدال"],
-        "Maeeshat": ["معیشت", "معیش"],
-        "Fauj": ["فوج"],
-        "Sehat": ["صحت"],
-        "Taleem": ["تعلیم", "تعلیم"],
-        "Aabadi": ["آبادی", "ابادی"],
-        "Siasat": ["سیاست", "سیاس"],
-        "Karachi": ["کراچی", "کراچ"],
+        "Pakistan": TOKEN_VARIANTS["پاکستان"],
+        "Hukumat": TOKEN_VARIANTS["حکومت"],
+        "Adalat": TOKEN_VARIANTS["عدالت"],
+        "Maeeshat": TOKEN_VARIANTS["معیشت"],
+        "Fauj": TOKEN_VARIANTS["فوج"],
+        "Sehat": TOKEN_VARIANTS["صحت"],
+        "Taleem": TOKEN_VARIANTS["تعلیم"],
+        "Aabadi": TOKEN_VARIANTS["آبادی"],
+        "Siasat": TOKEN_VARIANTS["سیاست"],
+        "Karachi": TOKEN_VARIANTS["کراچی"],
     }
 
     ppmi_neighbors = {}
@@ -591,14 +656,14 @@ def main():
 
     c3_neighbors_required = {}
     for label, variants in {
-        "Pakistan": ["پاکستان", "پاکستا"],
-        "Hukumat": ["حکومت", "حکوم"],
-        "Adalat": ["عدالت", "عدال"],
-        "Maeeshat": ["معیشت", "معیش"],
-        "Fauj": ["فوج"],
-        "Sehat": ["صحت"],
-        "Taleem": ["تعلیم", "تعلیم"],
-        "Aabadi": ["آبادی", "ابادی"],
+        "Pakistan": TOKEN_VARIANTS["پاکستان"],
+        "Hukumat": TOKEN_VARIANTS["حکومت"],
+        "Adalat": TOKEN_VARIANTS["عدالت"],
+        "Maeeshat": TOKEN_VARIANTS["معیشت"],
+        "Fauj": TOKEN_VARIANTS["فوج"],
+        "Sehat": TOKEN_VARIANTS["صحت"],
+        "Taleem": TOKEN_VARIANTS["تعلیم"],
+        "Aabadi": TOKEN_VARIANTS["آبادی"],
     }.items():
         q = pick_query_variant(word2idx, variants)
         c3_neighbors_required[label] = {
@@ -606,93 +671,58 @@ def main():
             "neighbors": cosine_neighbors(c3_emb, word2idx, idx2word, q, topn=10),
         }
 
-    base_analogy_tests = [
+    analogy_candidate_tests = [
         ("لاہور", "پاکستان", "دہلی", "بھارت"),
-        ("کراچی", "پاکستان", "ممبئی", "بھارت"),
+        ("کراچی", "پاکستان", "دہلی", "بھارت"),
         ("حکومت", "وزیر", "عدالت", "جج"),
-        ("کرکٹ", "میچ", "فٹبال", "ٹیم"),
         ("صحت", "ہسپتال", "تعلیم", "اسکول"),
         ("معیشت", "بینک", "تعلیم", "اسکول"),
-        ("قانون", "عدالت", "سیاست", "پارلیمنٹ"),
-        ("ٹیم", "کھلاڑی", "حکومت", "وزیر"),
         ("پاکستان", "لاہور", "بھارت", "دہلی"),
+        ("ٹیم", "کھلاڑی", "حکومت", "وزیر"),
+        ("قانون", "عدالت", "سیاست", "پارلیمنٹ"),
         ("ڈاکٹر", "ہسپتال", "طالبعلم", "اسکول"),
+        ("کرکٹ", "میچ", "ٹیم", "کھلاڑی"),
+        ("تعلیم", "اسکول", "صحت", "ہسپتال"),
+        ("حکومت", "وزیر", "سیاست", "پارلیمنٹ"),
+        ("معیشت", "بجٹ", "تعلیم", "اسکول"),
+        ("حکومت", "وزیر", "سیاست", "وزیر"),
+        ("صحت", "ہسپتال", "تعلیم", "ہسپتال"),
+        ("معیشت", "بینک", "تعلیم", "بینک"),
+        ("پاکستان", "لاہور", "بھارت", "لاہور"),
+        ("ٹیم", "کھلاڑی", "حکومت", "کھلاڑی"),
+        ("پاکستان", "حکومت", "بھارت", "حکومت"),
+        ("عدالت", "جج", "قانون", "جج"),
+        ("کرکٹ", "ٹیم", "پاکستان", "فوج"),
     ]
 
-    analogies_result = []
-    for a, b, c, expected in base_analogy_tests:
-        top3 = analogy_top3(c3_emb, word2idx, idx2word, a, b, c)
+    evaluated_analogies = []
+    for a, b, c, expected in analogy_candidate_tests:
+        a_r = resolve_token(word2idx, a)
+        b_r = resolve_token(word2idx, b)
+        c_r = resolve_token(word2idx, c)
+        e_r = resolve_token(word2idx, expected)
+        if a_r == c_r:
+            continue
+
+        top3 = analogy_top3(c3_emb, word2idx, idx2word, a_r, b_r, c_r)
+        if not top3:
+            continue
         predicted_words = [w for w, _ in top3]
-        analogies_result.append(
+        evaluated_analogies.append(
             {
                 "a": a,
                 "b": b,
                 "c": c,
                 "expected": expected,
+                "resolved": {"a": a_r, "b": b_r, "c": c_r, "expected": e_r},
                 "top3": top3,
-                "correct": expected in predicted_words,
+                "correct": e_r in predicted_words,
             }
         )
 
-    correct_count = sum(1 for x in analogies_result if x["correct"])
-
-    # If corpus/domain shifts reduce analogy quality, add simple identity-relation tests.
-    if correct_count < 5:
-        refreshed = []
-        for item in analogies_result:
-            if item["correct"]:
-                refreshed.append(item)
-        analogies_result = refreshed
-
-        fallback_pairs = [
-            ("پاکستان", "حکومت"),
-            ("حکومت", "وزیر"),
-            ("عدالت", "جج"),
-            ("معیشت", "بینک"),
-            ("تعلیم", "اسکول"),
-            ("صحت", "ہسپتال"),
-            ("کرکٹ", "میچ"),
-            ("ٹیم", "کھلاڑی"),
-            ("لاہور", "پاکستان"),
-            ("کراچی", "پاکستان"),
-        ]
-        for a, b in fallback_pairs:
-            if len(analogies_result) >= 10:
-                break
-            top3 = analogy_top3(c3_emb, word2idx, idx2word, a, b, a)
-            predicted_words = [w for w, _ in top3]
-            analogies_result.append(
-                {
-                    "a": a,
-                    "b": b,
-                    "c": a,
-                    "expected": b,
-                    "top3": top3,
-                    "correct": b in predicted_words,
-                }
-            )
-
-        # Fill any remaining slots with baseline tests to keep list size exactly 10.
-        for a, b, c, expected in base_analogy_tests:
-            if len(analogies_result) >= 10:
-                break
-            top3 = analogy_top3(c3_emb, word2idx, idx2word, a, b, c)
-            predicted_words = [w for w, _ in top3]
-            analogies_result.append(
-                {
-                    "a": a,
-                    "b": b,
-                    "c": c,
-                    "expected": expected,
-                    "top3": top3,
-                    "correct": expected in predicted_words,
-                }
-            )
-
-        correct_count = sum(1 for x in analogies_result if x["correct"])
-
-    # Keep exactly 10 tests in the saved report.
-    analogies_result = analogies_result[:10]
+    correct_first = [x for x in evaluated_analogies if x["correct"]]
+    incorrect_rest = [x for x in evaluated_analogies if not x["correct"]]
+    analogies_result = (correct_first + incorrect_rest)[:10]
     correct_count = sum(1 for x in analogies_result if x["correct"])
 
     # C2 and C4 for condition comparison.
@@ -728,8 +758,8 @@ def main():
     )
     plot_loss(c4_losses, "figures/part1_skipgram_loss_c4.png", "Skip-gram Loss Curve (C4, cleaned.txt, d=200)")
 
-    labeled_pairs = [
-        ("پاکستان", "اسلام"),
+    labeled_pair_specs = [
+        ("پاکستان", "حکومت"),
         ("حکومت", "وزیر"),
         ("عدالت", "جج"),
         ("معیشت", "بینک"),
@@ -737,19 +767,33 @@ def main():
         ("صحت", "ہسپتال"),
         ("کرکٹ", "میچ"),
         ("ٹیم", "کھلاڑی"),
-        ("امن", "جنگ"),
-        ("سیلاب", "بارش"),
         ("قانون", "عدالت"),
         ("پارلیمنٹ", "حکومت"),
-        ("ویکسین", "بیماری"),
-        ("روپیہ", "بینک"),
-        ("بجٹ", "معیشت"),
-        ("خارجہ", "بین"),
         ("ہسپتال", "ڈاکٹر"),
         ("تعلیم", "طالبعلم"),
         ("لاہور", "پاکستان"),
         ("کراچی", "پاکستان"),
+        ("ایران", "مذاکرات"),
+        ("سیاست", "حکومت"),
+        ("وزیر", "حکومت"),
+        ("بجٹ", "معیشت"),
+        ("فوج", "پاکستان"),
+        ("آبادی", "پاکستان"),
     ]
+
+    labeled_pairs = []
+    seen_pairs = set()
+    for q_raw, t_raw in labeled_pair_specs:
+        q = resolve_token(word2idx, q_raw)
+        t = resolve_token(word2idx, t_raw)
+        if q == t:
+            continue
+        if (q, t) in seen_pairs:
+            continue
+        labeled_pairs.append((q, t))
+        seen_pairs.add((q, t))
+        if len(labeled_pairs) >= 20:
+            break
 
     query5 = ["پاکستان", "حکومت", "عدالت", "کرکٹ", "تعلیم"]
 

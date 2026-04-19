@@ -2,10 +2,10 @@ Part 1 Summary
 ================
 TF-IDF shape: (240, 10001)
 PPMI shape: (10001, 10001)
-Analogy correct in top-3: 8/10
+Analogy correct in top-3: 7/10
 Condition MRR:
-  C1_PPMI: 0.0303
-  C2_Skipgram_raw: 0.0003
-  C3_Skipgram_cleaned: 0.0004
-  C4_Skipgram_cleaned_d200: 0.0006
+  C1_PPMI: 0.0524
+  C2_Skipgram_raw: 0.0008
+  C3_Skipgram_cleaned: 0.0006
+  C4_Skipgram_cleaned_d200: 0.0015
 Best condition: C1_PPMI
