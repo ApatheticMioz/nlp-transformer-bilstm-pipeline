@@ -1,15 +1,15 @@
-1. Transformer test accuracy was 0.6944 while BiLSTM test accuracy was 0.6111.
-2. The accuracy gap was 0.0833, so Transformer performed better.
-3. Transformer reached best validation accuracy at epoch 10.
-4. BiLSTM reached best validation accuracy at epoch 15.
+1. Transformer test accuracy was 0.5556 while BiLSTM test accuracy was 0.4167.
+2. The accuracy gap was 0.1389, so Transformer performed better.
+3. Transformer reached best validation accuracy at epoch 16.
+4. BiLSTM reached best validation accuracy at epoch 18.
 5. This means Transformer converged in fewer epochs.
-6. Average training time per epoch for Transformer was 0.26 seconds.
-7. Average training time per epoch for BiLSTM was 2.70 seconds.
-8. The Transformer is usually slower per epoch because multi-head attention computes token-to-token interactions.
-9. BiLSTM is often faster because it uses recurrent steps without full pairwise attention maps.
+6. Average training time per epoch for Transformer was 0.50 seconds.
+7. Average training time per epoch for BiLSTM was 5.59 seconds.
+8. In this run, Transformer trained faster per epoch.
+9. A likely reason is that its implementation is highly vectorized on GPU, while recurrent processing in BiLSTM is less parallel-friendly.
 10. The attention heatmaps show that final-layer heads focus strongly on a few topic-indicative tokens.
 11. Some heads focus near the [CLS] token while others focus on repeated category keywords.
 12. This indicates the Transformer learns where to read evidence for class decisions.
-13. For only 200-300 articles, BiLSTM can be more data-efficient and stable with limited supervision.
-14. Transformer can still work, but it benefits more from larger datasets and stronger regularization.
-15. In small-data settings, choosing BiLSTM is practical unless attention interpretability is a priority.
+13. For only 200-300 articles, Transformer appears more appropriate in this experiment.
+14. This is because it delivered better macro-F1 and used attention to focus on category-bearing tokens despite the smaller corpus.
+15. If additional labeled data becomes available, re-running both models is recommended to confirm whether this preference remains stable.

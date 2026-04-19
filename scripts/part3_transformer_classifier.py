@@ -2,6 +2,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 from collections import Counter, defaultdict
 
@@ -39,11 +40,98 @@ ID_TO_CATEGORY = {v: k for k, v in CATEGORY_TO_ID.items()}
 
 
 TOPIC_KEYWORDS = {
-    "Politics": ["حکومت", "وزیر", "پارلیمنٹ", "انتخاب", "الیکشن", "government", "minister", "parliament", "election"],
-    "Sports": ["کرکٹ", "میچ", "ٹیم", "کھلاڑی", "اسکور", "sports", "match", "team", "player", "cricket"],
-    "Economy": ["معیشت", "مہنگائی", "تجارت", "بینک", "بجٹ", "economy", "inflation", "trade", "bank", "gdp"],
-    "International": ["اقوام", "معاہدہ", "خارجہ", "بین", "international", "foreign", "treaty", "bilateral", "conflict"],
-    "HealthSociety": ["ہسپتال", "بیماری", "ویکسین", "سیلاب", "تعلیم", "health", "hospital", "disease", "vaccine", "education"],
+    "Politics": [
+        "حکومت",
+        "حکوم",
+        "وزیر",
+        "وزیراعظم",
+        "پارلیمنٹ",
+        "اسمبلی",
+        "انتخاب",
+        "الیکشن",
+        "سیاست",
+        "سیاسی",
+        "government",
+        "minister",
+        "parliament",
+        "election",
+    ],
+    "Sports": [
+        "کرکٹ",
+        "میچ",
+        "ٹیم",
+        "کھلاڑی",
+        "کھلاڑ",
+        "اسکور",
+        "رنز",
+        "اوور",
+        "کھیل",
+        "sports",
+        "match",
+        "team",
+        "player",
+        "score",
+        "cricket",
+    ],
+    "Economy": [
+        "معیشت",
+        "معیش",
+        "مہنگائی",
+        "تجارت",
+        "بینک",
+        "بجٹ",
+        "قرض",
+        "روپیہ",
+        "ڈالر",
+        "تیل",
+        "گیس",
+        "economy",
+        "inflation",
+        "trade",
+        "bank",
+        "gdp",
+        "budget",
+    ],
+    "International": [
+        "اقوام",
+        "اقوام متحدہ",
+        "معاہدہ",
+        "خارجہ",
+        "سفارت",
+        "مذاکرات",
+        "جنگ",
+        "ایران",
+        "امریکہ",
+        "بھارت",
+        "چین",
+        "سعودی",
+        "غزہ",
+        "یوکرین",
+        "international",
+        "foreign",
+        "treaty",
+        "bilateral",
+        "conflict",
+        "un",
+    ],
+    "HealthSociety": [
+        "ہسپتال",
+        "بیماری",
+        "ویکسین",
+        "سیلاب",
+        "تعلیم",
+        "صحت",
+        "ڈاکٹر",
+        "نیند",
+        "وبا",
+        "ایچ آئی وی",
+        "اسکول",
+        "health",
+        "hospital",
+        "disease",
+        "vaccine",
+        "education",
+    ],
 }
 
 
@@ -78,19 +166,60 @@ def load_metadata(path):
         return json.load(f)
 
 
-def infer_topic(text):
-    text_l = text.lower()
-    best = "Politics"
-    best_score = -1
+def normalize_for_match(text):
+    text = text.lower()
+    text = text.replace("آ", "ا")
+    text = text.replace("أ", "ا")
+    text = text.replace("إ", "ا")
+    text = text.replace("ٱ", "ا")
+    text = text.replace("ى", "ی")
+    text = text.replace("ي", "ی")
+    text = text.replace("ك", "ک")
+    text = re.sub(r"[^\u0600-\u06FFa-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def topic_scores(title_text, body_text):
+    title_norm = normalize_for_match(title_text)
+    body_norm = normalize_for_match(body_text)
+    title_tokens = title_norm.split()
+    body_tokens = body_norm.split()
+
+    scores = {k: 0 for k in TOPIC_KEYWORDS}
     for topic, kws in TOPIC_KEYWORDS.items():
         score = 0
         for kw in kws:
-            if kw in text_l:
-                score += 1
-        if score > best_score:
-            best_score = score
-            best = topic
-    return best
+            kw_norm = normalize_for_match(kw)
+            if not kw_norm:
+                continue
+            if " " in kw_norm:
+                score += 3 * title_norm.count(kw_norm)
+                score += body_norm.count(kw_norm)
+            else:
+                score += 3 * sum(1 for t in title_tokens if t == kw_norm)
+                score += sum(1 for t in body_tokens if t == kw_norm)
+        scores[topic] = score
+    return scores
+
+
+def infer_topic(title_text, body_text):
+    scores = topic_scores(title_text, body_text)
+    best_topic = max(scores, key=scores.get)
+    best_score = scores[best_topic]
+
+    if best_score > 0:
+        return best_topic
+
+    # Tie-break fallback when no keyword matches occur.
+    body_norm = normalize_for_match(body_text)
+    fallback_order = ["Politics", "International", "Economy", "Sports", "HealthSociety"]
+    for topic in fallback_order:
+        for kw in TOPIC_KEYWORDS[topic]:
+            kw_norm = normalize_for_match(kw)
+            if kw_norm and kw_norm in body_norm:
+                return topic
+    return "Politics"
 
 
 def build_labeled_articles(cleaned_rows, metadata):
@@ -98,8 +227,8 @@ def build_labeled_articles(cleaned_rows, metadata):
     for row in cleaned_rows:
         key = str(row["article_id"])
         title = metadata.get(key, {}).get("title", "")
-        body_preview = " ".join(row["tokens"][:400])
-        label_name = infer_topic(f"{title} {body_preview}")
+        body_preview = " ".join(row["tokens"][:500])
+        label_name = infer_topic(title, body_preview)
         out.append(
             {
                 "article_id": row["article_id"],
@@ -293,9 +422,11 @@ class TransformerTopicClassifier(nn.Module):
 
 
 class BiLSTMTopicClassifier(nn.Module):
-    def __init__(self, vocab_size, num_classes=5, emb_dim=128, hidden_dim=128, dropout=0.3):
+    def __init__(self, vocab_size, num_classes=5, emb_dim=128, hidden_dim=128, dropout=0.3, embedding_matrix=None):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, emb_dim, padding_idx=0)
+        if embedding_matrix is not None:
+            self.embedding.weight.data.copy_(torch.tensor(embedding_matrix, dtype=torch.float32))
         self.lstm = nn.LSTM(
             emb_dim,
             hidden_dim,
@@ -330,18 +461,65 @@ def cosine_warmup_lr(step, total_steps, base_lr, warmup_steps=50):
     return 0.5 * base_lr * (1.0 + math.cos(math.pi * progress))
 
 
-def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=False, device=None):
+def compute_class_weights(rows, num_classes):
+    counts = np.ones(num_classes, dtype=np.float32)
+    for row in rows:
+        counts[row["label"]] += 1.0
+
+    weights = np.sqrt(np.sum(counts) / counts)
+    weights = weights / np.mean(weights)
+    return torch.tensor(weights, dtype=torch.float32)
+
+
+def load_part1_embedding_init(word2idx, emb_dim):
+    emb_path = "embeddings/embeddings_w2v.npy"
+    vocab_path = "embeddings/word2idx.json"
+    if not os.path.exists(emb_path) or not os.path.exists(vocab_path):
+        return None, 0
+
+    part1_emb = np.load(emb_path)
+    with open(vocab_path, "r", encoding="utf-8") as f:
+        part1_word2idx = json.load(f)
+
+    matrix = np.random.normal(0, 0.02, (len(word2idx), emb_dim)).astype(np.float32)
+    matrix[0] = 0.0
+    matched = 0
+    copy_dim = min(emb_dim, part1_emb.shape[1])
+
+    for token, idx in word2idx.items():
+        src_idx = part1_word2idx.get(token)
+        if src_idx is None:
+            continue
+        matrix[idx, :copy_dim] = part1_emb[src_idx, :copy_dim]
+        if emb_dim > copy_dim:
+            matrix[idx, copy_dim:] = 0.0
+        matched += 1
+
+    return matrix, matched
+
+
+def train_classifier(
+    model,
+    train_loader,
+    val_loader,
+    epochs=20,
+    use_scheduler=False,
+    class_weights=None,
+    select_by="val_acc",
+    device=None,
+):
     if device is None:
         device = DEVICE
 
     model = model.to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(weight=(class_weights.to(device) if class_weights is not None else None))
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=0.01)
 
     train_losses = []
     val_losses = []
     train_accs = []
     val_accs = []
+    val_macro_f1s = []
     epoch_times = []
 
     total_steps = epochs * max(len(train_loader), 1)
@@ -349,6 +527,8 @@ def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=F
 
     best_state = None
     best_val_acc = -1.0
+    best_val_macro_f1 = -1.0
+    best_metric = -1.0
     best_epoch = 0
 
     for epoch in range(epochs):
@@ -371,6 +551,7 @@ def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=F
             loss = criterion(logits, labels)
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
             e_loss += float(loss.item())
@@ -401,13 +582,18 @@ def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=F
 
         val_losses.append(v_loss / max(len(val_loader), 1))
         val_acc = accuracy_score(vy_true, vy_pred)
+        val_macro_f1 = f1_score(vy_true, vy_pred, average="macro")
         val_accs.append(val_acc)
+        val_macro_f1s.append(val_macro_f1)
         epoch_times.append(time.perf_counter() - t0)
 
-        print(f"clf {epoch + 1}/{epochs} val_acc {val_acc:.4f}")
+        print(f"clf {epoch + 1}/{epochs} val_acc {val_acc:.4f} val_f1 {val_macro_f1:.4f}")
 
-        if val_acc > best_val_acc:
+        current_metric = val_macro_f1 if select_by == "macro_f1" else val_acc
+        if current_metric > best_metric:
+            best_metric = current_metric
             best_val_acc = val_acc
+            best_val_macro_f1 = val_macro_f1
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             best_epoch = epoch + 1
 
@@ -422,6 +608,7 @@ def train_classifier(model, train_loader, val_loader, epochs=20, use_scheduler=F
         "val_accs": val_accs,
         "epoch_times": epoch_times,
         "best_val_acc": best_val_acc,
+        "best_val_macro_f1": best_val_macro_f1,
         "best_epoch": best_epoch,
     }
 
@@ -556,6 +743,22 @@ def write_comparison(transformer_metrics, bilstm_metrics):
     t_time = float(np.mean(transformer_metrics["epoch_times"]))
     b_time = float(np.mean(bilstm_metrics["epoch_times"]))
 
+    if t_time < b_time:
+        faster_model = "Transformer"
+        speed_reason = "its implementation is highly vectorized on GPU, while recurrent processing in BiLSTM is less parallel-friendly"
+    else:
+        faster_model = "BiLSTM"
+        speed_reason = "its recurrent state updates are lighter than full self-attention in this setup"
+
+    t_macro = transformer_metrics["test_macro_f1"]
+    b_macro = bilstm_metrics["test_macro_f1"]
+    if t_macro >= b_macro:
+        small_data_choice = "Transformer"
+        small_data_reason = "it delivered better macro-F1 and used attention to focus on category-bearing tokens despite the smaller corpus"
+    else:
+        small_data_choice = "BiLSTM"
+        small_data_reason = "it generalized better on limited supervision and showed stronger macro-F1 in this run"
+
     lines = [
         f"1. Transformer test accuracy was {t_acc:.4f} while BiLSTM test accuracy was {b_acc:.4f}.",
         f"2. The accuracy gap was {acc_gap:.4f}, so {'Transformer' if acc_gap >= 0 else 'BiLSTM'} performed better.",
@@ -564,14 +767,14 @@ def write_comparison(transformer_metrics, bilstm_metrics):
         f"5. This means {'Transformer' if t_best_epoch < b_best_epoch else 'BiLSTM'} converged in fewer epochs.",
         f"6. Average training time per epoch for Transformer was {t_time:.2f} seconds.",
         f"7. Average training time per epoch for BiLSTM was {b_time:.2f} seconds.",
-        "8. The Transformer is usually slower per epoch because multi-head attention computes token-to-token interactions.",
-        "9. BiLSTM is often faster because it uses recurrent steps without full pairwise attention maps.",
+        f"8. In this run, {faster_model} trained faster per epoch.",
+        f"9. A likely reason is that {speed_reason}.",
         "10. The attention heatmaps show that final-layer heads focus strongly on a few topic-indicative tokens.",
         "11. Some heads focus near the [CLS] token while others focus on repeated category keywords.",
         "12. This indicates the Transformer learns where to read evidence for class decisions.",
-        "13. For only 200-300 articles, BiLSTM can be more data-efficient and stable with limited supervision.",
-        "14. Transformer can still work, but it benefits more from larger datasets and stronger regularization.",
-        "15. In small-data settings, choosing BiLSTM is practical unless attention interpretability is a priority.",
+        f"13. For only 200-300 articles, {small_data_choice} appears more appropriate in this experiment.",
+        f"14. This is because {small_data_reason}.",
+        "15. If additional labeled data becomes available, re-running both models is recommended to confirm whether this preference remains stable.",
     ]
 
     with open("data/part3_bilstm_vs_transformer.txt", "w", encoding="utf-8") as f:
@@ -591,19 +794,31 @@ def main():
     temp_labels = [r["label"] for r in temp_rows]
     val_rows, test_rows = train_test_split(temp_rows, test_size=0.50, random_state=SEED, stratify=temp_labels)
 
-    word2idx, idx2word = build_vocab(train_rows)
+    word2idx, idx2word = build_vocab(labeled_rows)
+    class_weights = compute_class_weights(train_rows, num_classes=5)
+    embedding_init, embedding_matches = load_part1_embedding_init(word2idx, emb_dim=128)
+    print(f"part3 matched embeddings from part1: {embedding_matches}/{len(word2idx)}")
 
     train_enc = encode_sequences(train_rows, word2idx, max_len=256)
     val_enc = encode_sequences(val_rows, word2idx, max_len=256)
     test_enc = encode_sequences(test_rows, word2idx, max_len=256)
 
     pin_mem = False
-    train_loader = DataLoader(TextDataset(train_enc), batch_size=16, shuffle=True, pin_memory=pin_mem, collate_fn=text_collate)
-    val_loader = DataLoader(TextDataset(val_enc), batch_size=16, shuffle=False, pin_memory=pin_mem, collate_fn=text_collate)
-    test_loader = DataLoader(TextDataset(test_enc), batch_size=16, shuffle=False, pin_memory=pin_mem, collate_fn=text_collate)
+    train_loader = DataLoader(TextDataset(train_enc), batch_size=8, shuffle=True, pin_memory=pin_mem, collate_fn=text_collate)
+    val_loader = DataLoader(TextDataset(val_enc), batch_size=8, shuffle=False, pin_memory=pin_mem, collate_fn=text_collate)
+    test_loader = DataLoader(TextDataset(test_enc), batch_size=8, shuffle=False, pin_memory=pin_mem, collate_fn=text_collate)
 
-    transformer = TransformerTopicClassifier(vocab_size=len(word2idx), num_classes=5, d_model=128, num_heads=4, d_ff=512, num_layers=4, dropout=0.1)
-    t_hist = train_classifier(transformer, train_loader, val_loader, epochs=20, use_scheduler=True, device=DEVICE)
+    transformer = TransformerTopicClassifier(vocab_size=len(word2idx), num_classes=5, d_model=128, num_heads=4, d_ff=512, num_layers=4, dropout=0.15)
+    t_hist = train_classifier(
+        transformer,
+        train_loader,
+        val_loader,
+        epochs=20,
+        use_scheduler=True,
+        class_weights=class_weights,
+        select_by="macro_f1",
+        device=DEVICE,
+    )
     plot_training_curves(t_hist["train_losses"], t_hist["val_losses"], t_hist["train_accs"], t_hist["val_accs"], "Transformer")
 
     t_acc, t_f1, t_true, t_pred, attn_payload = evaluate_classifier(t_hist["model"], test_loader, device=DEVICE)
@@ -611,8 +826,24 @@ def main():
     attention_files = save_attention_heatmaps(attn_payload)
     torch.save(t_hist["model"].state_dict(), "models/transformer_cls.pt")
 
-    bilstm = BiLSTMTopicClassifier(vocab_size=len(word2idx), num_classes=5, emb_dim=128, hidden_dim=128, dropout=0.3)
-    b_hist = train_classifier(bilstm, train_loader, val_loader, epochs=20, use_scheduler=False, device=DEVICE)
+    bilstm = BiLSTMTopicClassifier(
+        vocab_size=len(word2idx),
+        num_classes=5,
+        emb_dim=128,
+        hidden_dim=128,
+        dropout=0.3,
+        embedding_matrix=None,
+    )
+    b_hist = train_classifier(
+        bilstm,
+        train_loader,
+        val_loader,
+        epochs=20,
+        use_scheduler=False,
+        class_weights=class_weights,
+        select_by="macro_f1",
+        device=DEVICE,
+    )
     plot_training_curves(b_hist["train_losses"], b_hist["val_losses"], b_hist["train_accs"], b_hist["val_accs"], "BiLSTM")
 
     b_acc, b_f1, b_true, b_pred, _ = evaluate_classifier(b_hist["model"], test_loader, device=DEVICE)
@@ -623,6 +854,7 @@ def main():
         "test_macro_f1": t_f1,
         "best_epoch": t_hist["best_epoch"],
         "best_val_acc": t_hist["best_val_acc"],
+        "best_val_macro_f1": t_hist["best_val_macro_f1"],
         "epoch_times": t_hist["epoch_times"],
     }
     bilstm_metrics = {
@@ -630,6 +862,7 @@ def main():
         "test_macro_f1": b_f1,
         "best_epoch": b_hist["best_epoch"],
         "best_val_acc": b_hist["best_val_acc"],
+        "best_val_macro_f1": b_hist["best_val_macro_f1"],
         "epoch_times": b_hist["epoch_times"],
     }
 
